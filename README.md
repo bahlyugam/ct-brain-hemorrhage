@@ -71,24 +71,36 @@ Note: Data files are excluded from git via `.gitignore`.
 
 ## Project Structure
 
-- **Training Scripts:**
-  - [train.py](train.py) - Main YOLO training script
-  - [yolov8s_GRE.py](yolov8s_GRE.py) - YOLOv8 training with custom configurations
-
-- **Data Processing:**
-  - [s3_dicom_to_png.py](s3_dicom_to_png.py) - Convert DICOM files from S3 to PNG
-  - [bulk_s3_to_png.py](bulk_s3_to_png.py) - Batch DICOM to PNG conversion
-  - [download_negative_feedback_images.py](download_negative_feedback_images.py) - Download images from S3
-  - [yolo_augmented_dataset.py](yolo_augmented_dataset.py) - Data augmentation for YOLO
-
-- **Analysis & Utilities:**
-  - [analyze_dataset.py](analyze_dataset.py) - Dataset analysis and statistics
-  - [dataset_analysis.py](dataset_analysis.py) - Comprehensive dataset analysis
-  - [combine_datasets.py](combine_datasets.py) - Merge multiple datasets
-
-- **Deployment:**
-  - [deploy_yolo.py](deploy_yolo.py) - YOLO model deployment
-  - [yolo_inference_client.py](yolo_inference_client.py) - Inference client
+```
+brain_ct/
+├── train.py                    # Main training script
+├── ct_augmentations.py         # CT-specific augmentation techniques
+├── analyze_dataset.py          # Dataset analysis
+├── docs/                       # Documentation
+│   ├── SETUP_INSTRUCTIONS.md
+│   ├── WANDB_METRICS_GUIDE.md
+│   ├── PROJECT_OVERVIEW.md
+│   ├── PHASE3_SUMMARY.md
+│   └── ...
+├── deployment/                 # Deployment scripts
+│   ├── deploy_yolo.py
+│   ├── deploy_rfdetr.py
+│   ├── evaluate_test_set.py
+│   └── test_rfdetr_output.py
+├── utils/                      # Utility scripts
+│   ├── s3_dicom_to_png.py
+│   ├── bulk_s3_to_png.py
+│   ├── dataset_analysis.py
+│   ├── yolo_inference_client.py
+│   └── ...
+├── models/                     # Model implementations
+│   ├── yolo_model.py
+│   ├── rfdetr_model.py
+│   └── base_model.py
+├── scripts/                    # Additional scripts
+├── evaluation_results/         # Evaluation outputs
+└── data/                       # Data directory (gitignored)
+```
 
 ## Usage
 
@@ -101,13 +113,20 @@ python train.py
 ### Converting DICOM to PNG
 
 ```bash
-python s3_dicom_to_png.py
+python utils/s3_dicom_to_png.py
 ```
 
 ### Running Inference
 
 ```bash
-python deploy_yolo.py
+# YOLO deployment
+python deployment/deploy_yolo.py
+
+# RF-DETR deployment
+python deployment/deploy_rfdetr.py
+
+# Evaluate on test set
+python deployment/evaluate_test_set.py
 ```
 
 ## Security Notes
@@ -119,9 +138,13 @@ python deploy_yolo.py
 
 ## Documentation
 
-- [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md) - Project overview and architecture
-- [IMPROVEMENTS_SUMMARY.md](IMPROVEMENTS_SUMMARY.md) - Summary of improvements made
-- [QUICK_START_IMPROVEMENTS.md](QUICK_START_IMPROVEMENTS.md) - Quick start guide
+For detailed documentation, see the [docs/](docs/) directory:
+
+- [docs/SETUP_INSTRUCTIONS.md](docs/SETUP_INSTRUCTIONS.md) - Detailed setup instructions
+- [docs/WANDB_METRICS_GUIDE.md](docs/WANDB_METRICS_GUIDE.md) - Guide to using Weights & Biases
+- [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md) - Project overview and architecture
+- [docs/IMPROVEMENTS_SUMMARY.md](docs/IMPROVEMENTS_SUMMARY.md) - Summary of improvements made
+- [docs/PHASE3_SUMMARY.md](docs/PHASE3_SUMMARY.md) - Phase 3 development summary
 
 ## License
 

@@ -192,6 +192,81 @@ def get_training_augmentation(image_size=640, slice_type='thin'):
     ))
 
 
+def get_rfdetr_train_transforms(image_size=640):
+    """
+    Aggressive augmentation for RF-DETR training to prevent overfitting.
+
+    Uses COCO bbox format and medical-specific augmentations with increased
+    intensity compared to YOLO pipeline.
+
+    Args:
+        image_size: Target image size (default: 640)
+
+    Returns:
+        Albumentations Compose object with COCO format
+    """
+    return A.Compose([
+        # 1. Geometric Augmentations (Higher intensity for medical robustness)
+        A.HorizontalFlip(p=0.5),
+
+        A.ShiftScaleRotate(
+            shift_limit=0.1,        # ±10% translation
+            scale_limit=0.2,        # ±20% zoom (increased from 0.1)
+            rotate_limit=20,        # ±20° rotation (increased from 16)
+            border_mode=cv2.BORDER_CONSTANT,
+            value=0,
+            p=0.8                   # 80% probability (increased from 0.7)
+        ),
+
+        A.RandomSizedBBoxSafeCrop(
+            height=image_size,
+            width=image_size,
+            erosion_rate=0.0,       # No erosion - preserve hemorrhage visibility
+            p=0.6                   # 60% probability (increased from 0.5)
+        ),
+
+        # 2. Medical-Specific Augmentations (Window/Level variations)
+        A.RandomBrightnessContrast(
+            brightness_limit=0.2,   # ±20% brightness (increased from 0.15)
+            contrast_limit=0.2,     # ±20% contrast (increased from 0.15)
+            p=0.6                   # 60% probability (increased from 0.5)
+        ),
+
+        A.CLAHE(
+            clip_limit=4.0,         # Adaptive histogram equalization (increased from 3.0)
+            tile_grid_size=(8, 8),
+            p=0.3                   # 30% probability (increased from 0.2)
+        ),
+
+        # 3. Occlusion Robustness (Simulate partial views, artifacts)
+        A.CoarseDropout(
+            max_holes=12,           # More dropout regions (increased from 8)
+            max_height=24,          # Larger dropout size (increased from 16)
+            max_width=24,           # Larger dropout size (increased from 16)
+            min_holes=4,
+            min_height=8,
+            min_width=8,
+            fill_value=0,
+            p=0.4                   # 40% probability (increased from 0.3)
+        ),
+
+        # 4. Ensure consistent size
+        A.LongestMaxSize(max_size=image_size, interpolation=cv2.INTER_LINEAR),
+        A.PadIfNeeded(
+            min_height=image_size,
+            min_width=image_size,
+            border_mode=cv2.BORDER_CONSTANT,
+            value=0
+        ),
+
+    ], bbox_params=A.BboxParams(
+        format='coco',              # COCO format: [x_min, y_min, width, height]
+        label_fields=['category_ids'],
+        min_visibility=0.3,         # Reject boxes with <30% visibility after augmentation
+        min_area=400                # Reject very small boxes (20x20 pixels)
+    ))
+
+
 def get_validation_augmentation(image_size=640):
     """
     Minimal augmentation for validation (resize only).

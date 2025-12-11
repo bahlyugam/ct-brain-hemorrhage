@@ -1,63 +1,95 @@
 import modal
 import os
-import wandb
-from ultralytics import YOLO
-import numpy as np
-import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix
-import itertools
-import glob
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import json
-from datetime import datetime
-import yaml
 from pathlib import Path
 
-# Augmentation strategy configuration
-USE_PREAUGMENTED = False  # Using extensive on-the-fly augmentations (RSNA winners' strategy)
+# These imports will happen inside Modal functions where dependencies are available
+# import wandb
+# from ultralytics import YOLO
+# import numpy as np
+# import matplotlib.pyplot as plt
+# from sklearn.metrics import confusion_matrix
+# import itertools
+# import glob
+# import torch
+# import torch.nn as nn
+# import torch.nn.functional as F
+# import json
+# from datetime import datetime
+# import yaml
+
+# ============================================================================
+# MODEL SELECTION & CONFIGURATION
+# ============================================================================
+# Model type: 'yolo' or 'rfdetr'
+MODEL_TYPE = "rfdetr"  # Change to 'rfdetr' for RF-DETR training
+MODEL_VARIANT = "medium"  # YOLO: yolov8m, RF-DETR: medium
+
+# Dataset configuration
+USE_FILTERED_DATASET = True  # Use filtered 4-class dataset (EDH/HC removed)
+USE_PREAUGMENTED = False  # Using extensive on-the-fly augmentations
+
+# Original 6-class dataset (for backward compatibility)
 ORIGINAL_DATA_DIR = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/archived/current_20251105/UAT_CT_BRAIN_HEMORRHAGE.v2i.yolov8_combined"
 
-if USE_PREAUGMENTED:
-    local_data_dir = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/archived/current_20251105/UAT_CT_BRAIN_HEMORRHAGE.v2i.yolov8_combined_augmented"
-    print(f"\n{'='*80}")
-    print("USING PRE-AUGMENTED DATASET (4x DATA, 8-10x FASTER TRAINING)")
-    print(f"{'='*80}")
-    print(f"Dataset: Pre-augmented (23,956 images)")
-    print("Pre-augmented with: flip, rotation ±10°, brightness/contrast")
-    print("Online augmentation: minimal (light fliplr only)")
-    print("Expected training speed: 0.8-1.0 it/s")
-    print(f"{'='*80}\n")
+# Filtered 4-class dataset (IPH, IVH, SAH, SDH only)
+FILTERED_YOLO_DIR = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/filtered_4class/yolo"
+FILTERED_COCO_DIR = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/filtered_4class/coco"
+
+# Select dataset based on configuration
+if USE_FILTERED_DATASET:
+    # Mount only filtered_4class directory (7k files - under 125k limit)
+    local_data_dir = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/filtered_4class"
+    if MODEL_TYPE == 'yolo':
+        NUM_CLASSES = 4
+        CLASS_NAMES = ['IPH', 'IVH', 'SAH', 'SDH']
+        print(f"\n{'='*80}")
+        print("USING FILTERED 4-CLASS YOLO DATASET (EDH/HC REMOVED)")
+        print(f"{'='*80}")
+        print(f"Dataset: /datasets/yolo")
+        print(f"Classes: {CLASS_NAMES}")
+        print(f"Max imbalance: 2.26x (was 25.77x)")
+        print(f"{'='*80}\n")
+    elif MODEL_TYPE == 'rfdetr':
+        local_data_dir = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/filtered_4class"
+        NUM_CLASSES = 4
+        CLASS_NAMES = ['IPH', 'IVH', 'SAH', 'SDH']
+        print(f"\n{'='*80}")
+        print("USING FILTERED 4-CLASS COCO DATASET (EDH/HC REMOVED)")
+        print(f"{'='*80}")
+        print(f"Dataset: {local_data_dir}")
+        print(f"Classes: {CLASS_NAMES}")
+        print(f"Format: COCO JSON")
+        print(f"{'='*80}\n")
 else:
+    # Original 6-class dataset
     local_data_dir = ORIGINAL_DATA_DIR
+    NUM_CLASSES = 6
+    CLASS_NAMES = ['EDH', 'HC', 'IPH', 'IVH', 'SAH', 'SDH']
     print(f"\n{'='*80}")
-    print("USING EXTENSIVE ON-THE-FLY AUGMENTATIONS (RSNA WINNERS' STRATEGY)")
+    print("USING ORIGINAL 6-CLASS DATASET")
     print(f"{'='*80}")
-    print(f"Dataset: Original (5,989 images)")
-    print("On-the-fly augmentations: rotation ±10°, translation 6.25%, scale 50%,")
-    print("  horizontal flip 50%, mosaic 0.8, HSV brightness/contrast")
-    print("Expected training speed: 0.1-0.2 it/s (slower but better results)")
+    print(f"Dataset: {local_data_dir}")
+    print(f"WARNING: Severe class imbalance (25.77x)")
     print(f"{'='*80}\n")
 
 # Multi-resolution training hyperparameters
-BATCH_SIZE = 24  # Will be split 50-50 between thin and thick
-IMAGE_SIZE = 640  # Increased from 512 for better multi-scale
+BATCH_SIZE = 24 if MODEL_TYPE == 'yolo' else 16  # RF-DETR uses smaller batch
+IMAGE_SIZE = 512
 EPOCHS = 200
-PATIENCE = 50  # Reduced from 100 - with conservative augmentation, model should converge faster
-MODEL = "yolov8m"  # Upgraded from yolov8s - optimal for 7.5K images + 6 classes
-VERSION = "v2"  # Conservative augmentation + focal loss preparation (Phase 1+2)
+PATIENCE = 50
+MODEL = MODEL_VARIANT
+VERSION = "v3_filtered_4class"  # New version for filtered dataset
 MODEL_PATH = f"{MODEL}.pt"
 
-# Fine-tuning parameters for multi-resolution
-FREEZE_LAYERS = 0  # No freezing - all layers train (optimal for binary detection with 23,956 images)
-LEARNING_RATE = 0.005  
+# Fine-tuning parameters
+FREEZE_LAYERS = 0
+LEARNING_RATE = 0.005 if MODEL_TYPE == 'yolo' else 1e-4  # RF-DETR uses lower LR
 FINAL_LR_FACTOR = 0.1
-WARMUP_EPOCHS = 5
+WARMUP_EPOCHS = 5 if MODEL_TYPE == 'yolo' else 10  # RF-DETR uses longer warmup
 
-# Domain mixing ratios
-THIN_SLICE_RATIO = 0.5  # 50% thin slices per batch
-THICK_SLICE_RATIO = 0.5  # 50% thick slices per batch
+# Domain mixing ratios (for YOLO)
+THIN_SLICE_RATIO = 0.5
+THICK_SLICE_RATIO = 0.5
 
 # Create a Modal volume to store the model
 # volume = modal.Volume.from_name(f"{MODEL}-{VERSION}-brain-ct-hemorrhage", create_if_missing=True)
@@ -77,6 +109,7 @@ image = (
         "gstreamer1.0-plugins-good",
     )
     .pip_install(
+        # Core ML frameworks
         "ultralytics",
         "wandb",
         "opencv-python-headless",
@@ -84,12 +117,22 @@ image = (
         "PyYAML",
         "scikit-learn",
         "matplotlib",
-        "supervision",
         "albumentations>=1.3.0",  # Evidence-based augmentations
         "grpclib==0.4.6",
-        "h2<5.0.0"
+        "h2==4.1.0",  # Fixed version compatible with grpclib 0.4.6
+        "pillow",  # For image processing
+        "tqdm",  # Progress bars
+
+        # RF-DETR dependencies (CORRECTED - based on official Roboflow Colab)
+        "rfdetr==1.2.1",  # Roboflow RF-DETR training package
+        "supervision==0.26.1",  # For visualization and benchmarking (also used by YOLO)
+        "roboflow",  # For dataset management (optional)
+        "pycocotools>=2.0.6",  # COCO evaluation tools
     )
-    .add_local_dir(local_data_dir, "/datasets")
+    # NOTE: Dataset will be uploaded to Modal Volume instead of mounting
+    # .add_local_dir() exceeds 125k file limit, so we skip it here
+
+    # Add augmentation and loss files
     .add_local_file(
         "/Users/yugambahl/Desktop/brain_ct/ct_augmentations.py",
         "/root/ct_augmentations.py"
@@ -101,6 +144,27 @@ image = (
     .add_local_file(
         "/Users/yugambahl/Desktop/brain_ct/custom_loss.py",
         "/root/custom_loss.py"
+    )
+
+    # Add model wrappers (NEW)
+    .add_local_dir(
+        "/Users/yugambahl/Desktop/brain_ct/models",
+        "/root/models"
+    )
+
+    # Add data processing scripts ONLY (not datasets - too many files)
+    .add_local_file(
+        "/Users/yugambahl/Desktop/brain_ct/data/filter_yolo_dataset.py",
+        "/root/data/filter_yolo_dataset.py"
+    )
+    .add_local_file(
+        "/Users/yugambahl/Desktop/brain_ct/data/yolo_to_coco.py",
+        "/root/data/yolo_to_coco.py"
+    )
+    # Add augmented dataset (17k files for anti-overfitting training)
+    .add_local_dir(
+        "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/augmented_3x_4class",
+        "/datasets_augmented"
     )
 )
 
@@ -362,12 +426,634 @@ def create_stratified_dataset_yaml(base_path="/datasets", output_path="/model/st
     # Save config
     with open(output_path, 'w') as f:
         yaml.dump(stratified_config, f, default_flow_style=False)
-    
+
     print(f"\nCreated dataset config at {output_path}")
     print(f"Mixed training will use both thin and thick slices from combined directories")
-    
+
     return stratified_config
 
+
+# ============================================================================
+# DATASET PREPARATION (NEW)
+# ============================================================================
+
+# Create a separate volume for datasets
+dataset_volume = modal.Volume.from_name("brain-ct-datasets", create_if_missing=True)
+
+@app.function(
+    image=image,
+    volumes={"/data": dataset_volume},
+    timeout=3600  # 1 hour
+)
+def check_dataset_uploaded():
+    """
+    Check if the original dataset has been uploaded to Modal Volume.
+
+    To upload your dataset, run this command locally:
+    modal volume put brain-ct-datasets /Users/yugambahl/Desktop/brain_ct/data/training_datasets/archived/current_20251105/UAT_CT_BRAIN_HEMORRHAGE.v2i.yolov8_combined /original_6class
+    """
+    import os
+
+    remote_path = "/data/original_6class"
+
+    if os.path.exists(remote_path):
+        # Count files
+        file_count = sum(1 for _ in os.walk(remote_path) for _ in _[2])
+        print(f"✓ Dataset found at {remote_path}")
+        print(f"✓ Total files: {file_count}")
+        return {"status": "found", "file_count": file_count}
+    else:
+        print(f"✗ Dataset NOT found at {remote_path}")
+        print("\nPlease upload using:")
+        print(f"modal volume put brain-ct-datasets {ORIGINAL_DATA_DIR} /original_6class")
+        return {"status": "not_found"}
+
+@app.function(
+    image=image,
+    volumes={"/data": dataset_volume},
+    timeout=7200  # 2 hours for dataset preparation
+)
+def prepare_filtered_datasets():
+    """
+    Prepare filtered 4-class datasets (remove EDH/HC).
+
+    This function:
+    1. Filters YOLO dataset to remove images with EDH (class 0) or HC (class 1)
+    2. Remaps remaining classes: IPH(2→0), IVH(3→1), SAH(4→2), SDH(5→3)
+    3. Converts filtered YOLO to COCO format for RF-DETR
+    """
+    import sys
+    sys.path.insert(0, '/root')
+
+    from data.filter_yolo_dataset import filter_yolo_dataset
+    from data.yolo_to_coco import convert_yolo_to_coco
+
+    print(f"\n{'='*80}")
+    print("PREPARING FILTERED 4-CLASS DATASETS")
+    print(f"{'='*80}\n")
+
+    # Step 1: Filter YOLO dataset
+    print("Step 1: Filtering YOLO dataset (removing EDH & HC)...")
+    filter_stats = filter_yolo_dataset(
+        input_path="/data/original_6class",  # From Modal Volume
+        output_path="/data/filtered_4class/yolo",
+        class_filter=[0, 1],  # Remove EDH and HC
+        use_symlinks=True
+    )
+
+    # Step 2: Convert to COCO format
+    print("\nStep 2: Converting to COCO format for RF-DETR...")
+    coco_stats = convert_yolo_to_coco(
+        yolo_dataset_path="/data/filtered_4class/yolo",
+        output_path="/data/filtered_4class/coco",
+        class_names=['IPH', 'IVH', 'SAH', 'SDH']
+    )
+
+    # Commit changes to volume
+    dataset_volume.commit()
+
+    # Summary
+    print(f"\n{'='*80}")
+    print("DATASET PREPARATION COMPLETE")
+    print(f"{'='*80}")
+    print(f"Filtered images: {filter_stats['kept_images']}/{filter_stats['total_images']}")
+    print(f"Imbalance ratio: {filter_stats['imbalance_ratio']:.2f}x (was 25.77x)")
+    print(f"YOLO dataset: /data/filtered_4class/yolo")
+    print(f"COCO dataset: /data/filtered_4class/coco")
+    print(f"{'='*80}\n")
+
+    return {
+        'yolo_stats': filter_stats,
+        'coco_stats': coco_stats
+    }
+
+
+@app.function(
+    image=image,
+    volumes={"/data": dataset_volume},
+    timeout=7200  # 2 hours for augmentation
+)
+def prepare_augmented_dataset(multiplier: int = 3, strength: str = 'aggressive'):
+    """
+    Create augmented version of filtered dataset to prevent overfitting.
+
+    This function multiplies the training dataset by applying aggressive augmentations.
+    Validation and test sets are copied unchanged.
+
+    Args:
+        multiplier: Dataset size multiplier (default: 3 = 2 augmented + 1 original per image)
+        strength: Augmentation strength ('light', 'medium', 'aggressive')
+
+    Returns:
+        Statistics about the augmented dataset
+    """
+    import sys
+    sys.path.insert(0, '/root')
+
+    from pathlib import Path
+    import json
+    import shutil
+    import cv2
+    import numpy as np
+    from tqdm import tqdm
+    import albumentations as A
+
+    print(f"\n{'='*80}")
+    print("PREPARING AUGMENTED DATASET (ANTI-OVERFITTING)")
+    print(f"{'='*80}")
+    print(f"Multiplier: {multiplier}x")
+    print(f"Strength: {strength}")
+    print(f"Input: /data/filtered_4class/coco")
+    print(f"Output: /data/augmented_{multiplier}x_4class/coco")
+    print(f"{'='*80}\n")
+
+    # Import augmentation pipeline
+    from ct_augmentations import get_rfdetr_train_transforms
+
+    input_dir = Path("/data/filtered_4class/coco")
+    output_dir = Path(f"/data/augmented_{multiplier}x_4class/coco")
+
+    # Get augmentation pipeline
+    transform = get_rfdetr_train_transforms(image_size=640)
+
+    stats = {'splits': {}}
+
+    # Process each split
+    for split in ['train', 'valid', 'test']:
+        split_input = input_dir / split
+        split_output = output_dir / split
+
+        if not split_input.exists():
+            print(f"⚠ Skipping {split} (not found)")
+            continue
+
+        print(f"\n📂 Processing {split} split...")
+
+        # Create output directory (flat structure, no images/ subdirectory)
+        split_output.mkdir(parents=True, exist_ok=True)
+
+        # Load annotations
+        ann_file = split_input / '_annotations.coco.json'
+        if not ann_file.exists():
+            print(f"⚠ No annotations found for {split}, skipping")
+            continue
+
+        with open(ann_file, 'r') as f:
+            coco_data = json.load(f)
+
+        # For validation and test, just copy (no augmentation)
+        if split in ['valid', 'test']:
+            print(f"  Copying {len(coco_data['images'])} images (no augmentation)...")
+
+            # Copy images (flat structure - images are in split_input/ not split_input/images/)
+            for img_info in tqdm(coco_data['images']):
+                src = split_input / img_info['file_name']
+                dst = split_output / img_info['file_name']
+                if not src.exists():
+                    print(f"  ⚠ File not found: {src}, skipping")
+                    continue
+                shutil.copy2(src, dst)
+
+            # Copy annotations
+            with open(split_output / '_annotations.coco.json', 'w') as f:
+                json.dump(coco_data, f, indent=2)
+
+            stats['splits'][split] = {
+                'images': len(coco_data['images']),
+                'annotations': len(coco_data['annotations'])
+            }
+            print(f"  ✓ Copied {len(coco_data['images'])} images")
+            continue
+
+        # For training, apply augmentation
+        print(f"  Augmenting {len(coco_data['images'])} images × {multiplier}...")
+
+        # New COCO data structure
+        new_coco_data = {
+            'info': coco_data.get('info', {}),
+            'licenses': coco_data.get('licenses', []),
+            'categories': coco_data['categories'],
+            'images': [],
+            'annotations': []
+        }
+
+        next_image_id = 1
+        next_ann_id = 1
+
+        # Create image_id -> annotations mapping
+        image_to_anns = {}
+        for ann in coco_data['annotations']:
+            img_id = ann['image_id']
+            if img_id not in image_to_anns:
+                image_to_anns[img_id] = []
+            image_to_anns[img_id].append(ann)
+
+        # Process each image
+        for img_info in tqdm(coco_data['images']):
+            # Flat structure - images are in split_input/ not split_input/images/
+            img_path = split_input / img_info['file_name']
+
+            if not img_path.exists():
+                print(f"  ⚠ File not found: {img_path}, skipping")
+                continue
+
+            image = cv2.imread(str(img_path))
+
+            if image is None:
+                print(f"  ⚠ Failed to load {img_info['file_name']}, skipping")
+                continue
+
+            # Get annotations for this image
+            img_anns = image_to_anns.get(img_info['id'], [])
+
+            # Convert annotations to COCO bbox format
+            bboxes = []
+            category_ids = []
+            for ann in img_anns:
+                bboxes.append(ann['bbox'])  # Already in COCO format [x, y, w, h]
+                category_ids.append(ann['category_id'])
+
+            # Generate multiplier versions (original + augmented)
+            for version in range(multiplier):
+                if version == 0:
+                    # First version: original (no augmentation, just copy)
+                    aug_image = image.copy()
+                    aug_bboxes = bboxes.copy()
+                    aug_category_ids = category_ids.copy()
+                else:
+                    # Apply augmentation
+                    try:
+                        augmented = transform(
+                            image=image,
+                            bboxes=bboxes,
+                            category_ids=category_ids
+                        )
+                        aug_image = augmented['image']
+                        aug_bboxes = augmented['bboxes']
+                        aug_category_ids = augmented['category_ids']
+                    except Exception as e:
+                        print(f"  ⚠ Augmentation failed for {img_info['file_name']} v{version}: {e}")
+                        continue
+
+                # Save augmented image
+                base_name = Path(img_info['file_name']).stem
+                ext = Path(img_info['file_name']).suffix
+                new_filename = f"{base_name}_aug{version}{ext}"
+                new_img_path = split_output / 'images' / new_filename
+
+                cv2.imwrite(str(new_img_path), aug_image)
+
+                # Add image info
+                new_img_info = {
+                    'id': next_image_id,
+                    'file_name': new_filename,
+                    'width': aug_image.shape[1],
+                    'height': aug_image.shape[0],
+                }
+                new_coco_data['images'].append(new_img_info)
+
+                # Add annotations
+                for bbox, cat_id in zip(aug_bboxes, aug_category_ids):
+                    new_ann = {
+                        'id': next_ann_id,
+                        'image_id': next_image_id,
+                        'category_id': cat_id,
+                        'bbox': list(bbox),  # [x, y, w, h]
+                        'area': bbox[2] * bbox[3],  # w * h
+                        'iscrowd': 0,
+                        'segmentation': []
+                    }
+                    new_coco_data['annotations'].append(new_ann)
+                    next_ann_id += 1
+
+                next_image_id += 1
+
+        # Save augmented annotations
+        with open(split_output / '_annotations.coco.json', 'w') as f:
+            json.dump(new_coco_data, f, indent=2)
+
+        stats['splits'][split] = {
+            'images': len(new_coco_data['images']),
+            'annotations': len(new_coco_data['annotations']),
+            'multiplier': multiplier,
+            'original_images': len(coco_data['images'])
+        }
+
+        print(f"  ✓ Created {len(new_coco_data['images'])} augmented images ({multiplier}x original)")
+        print(f"  ✓ Created {len(new_coco_data['annotations'])} augmented annotations")
+
+    # Commit changes to volume
+    dataset_volume.commit()
+
+    print(f"\n{'='*80}")
+    print("AUGMENTED DATASET PREPARATION COMPLETE")
+    print(f"{'='*80}")
+    print(f"Output: /data/augmented_{multiplier}x_4class/coco")
+    print(f"Training images: {stats['splits'].get('train', {}).get('images', 0)} ({multiplier}x)")
+    print(f"Validation images: {stats['splits'].get('valid', {}).get('images', 0)} (unchanged)")
+    print(f"Test images: {stats['splits'].get('test', {}).get('images', 0)} (unchanged)")
+    print(f"{'='*80}\n")
+
+    return stats
+
+
+@app.local_entrypoint()
+def train_augmented(model_type='rfdetr', variant='medium', multiplier=3):
+    """
+    Train on locally mounted augmented dataset (ANTI-OVERFITTING VERSION).
+
+    The augmented dataset is automatically mounted from your local filesystem.
+    No upload needed!
+
+    Args:
+        model_type: 'yolo' or 'rfdetr' (default: rfdetr)
+        variant: Model variant (e.g., 'medium')
+        multiplier: Dataset multiplier (default: 3)
+    """
+    from pathlib import Path
+
+    # Check if local dataset exists
+    local_dataset = f"/Users/yugambahl/Desktop/brain_ct/data/training_datasets/augmented_{multiplier}x_4class"
+    if not Path(local_dataset).exists():
+        print(f"❌ Error: Local augmented dataset not found at {local_dataset}")
+        print(f"Please run augmentation first:")
+        print(f"  python scripts/augment_coco_dataset.py --input data/training_datasets/filtered_4class/coco --output data/training_datasets/augmented_{multiplier}x_4class/coco --multiplier {multiplier}")
+        return
+
+    print(f"\n{'='*80}")
+    print("STARTING TRAINING WITH AUGMENTED DATASET (ANTI-OVERFITTING)")
+    print(f"{'='*80}")
+    print(f"Dataset will be mounted from: {local_dataset}")
+    print(f"Modal will automatically mount your local directory")
+    print(f"{'='*80}\n")
+
+    # Start training (dataset is already mounted)
+    train_model_augmented.remote(model_type=model_type, variant=variant, multiplier=multiplier)
+
+
+@app.function(
+    image=image,
+    gpu="A100-40GB",  # Upgraded from A10G for larger batch size (32)
+    secrets=[modal.Secret.from_name("wandb-api-key")],
+    volumes={"/data": dataset_volume, "/model": volume},
+    timeout=86400,  # 24 hours
+    memory=49152,    # 48GB RAM for faster data loading with larger batches
+    cpu=12,          # 12 CPUs for parallel data loading
+    min_containers=0
+)
+def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3):
+    """
+    Train RF-DETR on augmented dataset (ANTI-OVERFITTING VERSION).
+
+    This function trains using the augmented dataset uploaded to Modal Volume.
+    Includes enhanced regularization and early stopping.
+
+    Args:
+        model_type: 'yolo' or 'rfdetr' (recommended: rfdetr for augmented data)
+        variant: Model variant (e.g., 'medium' for RF-DETR)
+        multiplier: Dataset multiplier used (default: 3)
+
+    Returns:
+        Training results
+    """
+    import sys
+    sys.path.insert(0, '/root')
+
+    # Import dependencies inside Modal function
+    import os
+    import wandb
+    import json
+    from models.model_factory import create_model, get_recommended_config
+
+    print(f"\n{'='*80}")
+    print(f"TRAINING WITH AUGMENTED DATASET (ANTI-OVERFITTING)")
+    print(f"{'='*80}")
+    print(f"Model: {model_type.upper()} {variant.upper()}")
+    print(f"Dataset: Augmented {multiplier}x (with enhanced regularization)")
+    print(f"Classes: {NUM_CLASSES} ({CLASS_NAMES})")
+    print(f"{'='*80}\n")
+
+    # NOTE: WandB initialization removed - RF-DETR handles it natively now
+    # WandB will be initialized automatically by RF-DETR with wandb=True parameter
+
+    # Get recommended training config first (to get resolution)
+    base_config = get_recommended_config(model_type, variant, dataset_size=6999 * multiplier)
+
+    # Create model using factory with resolution from config
+    model = create_model(
+        model_type=model_type,
+        variant=variant,
+        num_classes=NUM_CLASSES,
+        pretrained=True,
+        resolution=base_config.get('resolution', 640)
+    )
+
+    # Prepare dataset path for augmented data (mounted at /datasets_augmented)
+    if model_type == 'rfdetr':
+        dataset_path = f"/datasets_augmented/coco"
+        train_config = {
+            **base_config,
+            'dataset_dir': dataset_path,
+            'epochs': EPOCHS,
+            'patience': 50,  # Early stopping
+            'save_dir': '/model',
+        }
+    else:
+        print(f"⚠ Warning: Augmented dataset training is optimized for RF-DETR")
+        dataset_path = f"/data/augmented_{multiplier}x_4class/yolo"
+        train_config = {
+            **base_config,
+            'data': dataset_path + '/data.yaml',
+            'epochs': EPOCHS,
+            'patience': 50,
+            'project': '/model',
+            'name': f'{variant}_{NUM_CLASSES}class_aug{multiplier}x',
+        }
+
+    # Train
+    print(f"\nStarting training with enhanced regularization:")
+    print(f"  Dataset: {dataset_path}")
+    print(f"  Training images: {6999 * multiplier} (original: 5,565 × {multiplier})")
+    print(f"  Config:")
+    print(json.dumps(train_config, indent=2))
+
+    results = model.train(data_path=dataset_path, **train_config)
+
+    # Evaluate on test set after training
+    print(f"\n{'='*80}")
+    print("EVALUATING ON TEST SET")
+    print(f"{'='*80}\n")
+
+    test_dataset_path = dataset_path.replace('/coco', '/coco/test') if model_type == 'rfdetr' else dataset_path
+
+    if model_type == 'rfdetr':
+        test_results = model.validate(data_path=test_dataset_path)
+
+        # Log test metrics to WandB with 'test/' prefix
+        if test_results and 'metrics' in test_results:
+            test_metrics = {}
+            for key, value in test_results['metrics'].items():
+                # Add test/ prefix to differentiate from validation
+                test_key = f"test/{key}" if not key.startswith('test/') else key
+                test_metrics[test_key] = value
+
+            wandb.log(test_metrics)
+            print(f"\n✓ Logged test set metrics to WandB")
+            print(f"Test metrics: {test_metrics}")
+
+    # Save final model
+    final_model_path = f"/model/{model_type}_{variant}_{NUM_CLASSES}class_aug{multiplier}x_final.pt"
+    if hasattr(model, 'save'):
+        model.save(final_model_path)
+        print(f"Model saved to: {final_model_path}")
+
+    # Commit model to volume
+    volume.commit()
+
+    # Log final training metrics to WandB
+    if results and 'metrics' in results:
+        wandb.log(results['metrics'])
+
+    wandb.finish()
+
+    print(f"\n{'='*80}")
+    print("AUGMENTED TRAINING COMPLETE")
+    print(f"{'='*80}\n")
+
+    return results
+
+
+# ============================================================================
+# UNIFIED MODEL TRAINING (NEW)
+# ============================================================================
+@app.function(
+    image=image,
+    gpu="A10G",
+    secrets=[modal.Secret.from_name("wandb-api-key")],
+    volumes={"/model": volume},
+    timeout=86400,  # 24 hours
+    memory=32768,    # 32GB RAM for faster data loading
+    cpu=8,          # 8 CPUs for parallel data loading
+    min_containers=0
+)
+def train_model(model_type='yolo', variant='yolov8m', resume=False):
+    """
+    Unified training function for both YOLO and RF-DETR.
+
+    Args:
+        model_type: 'yolo' or 'rfdetr'
+        variant: Model variant (e.g., 'yolov8m' for YOLO, 'medium' for RF-DETR)
+        resume: Resume from latest checkpoint
+    """
+    import sys
+    sys.path.insert(0, '/root')
+
+    # Import dependencies inside Modal function
+    import os
+    import wandb
+    from models.model_factory import create_model, get_recommended_config
+
+    print(f"\n{'='*80}")
+    print(f"UNIFIED MODEL TRAINING: {model_type.upper()} {variant.upper()}")
+    print(f"{'='*80}")
+    print(f"Model type: {model_type}")
+    print(f"Variant: {variant}")
+    print(f"Classes: {NUM_CLASSES} ({CLASS_NAMES})")
+    print(f"Resume: {resume}")
+    print(f"{'='*80}\n")
+
+    # Datasets are already mounted at /datasets from local filtered_4class directory
+    # No preparation needed - data was already prepared locally and mounted via image.add_local_dir()
+    print(f"Using pre-prepared filtered dataset mounted at /datasets")
+
+    # Initialize WandB
+    wandb.login(key=os.environ["WANDB_API_KEY"])
+    run = wandb.init(
+        project="brain-ct-hemorrhage",
+        name=f"{model_type}_{variant}_{NUM_CLASSES}class_{VERSION}",
+        config={
+            "model_type": model_type,
+            "variant": variant,
+            "num_classes": NUM_CLASSES,
+            "class_names": CLASS_NAMES,
+            "epochs": EPOCHS,
+            "batch_size": BATCH_SIZE,
+            "learning_rate": LEARNING_RATE,
+            "filtered_dataset": USE_FILTERED_DATASET,
+        }
+    )
+
+    # Create model using factory
+    model = create_model(
+        model_type=model_type,
+        variant=variant,
+        num_classes=NUM_CLASSES,
+        pretrained=True
+    )
+
+    # Load checkpoint if resuming
+    if resume:
+        checkpoint_path = find_latest_model()
+        if checkpoint_path:
+            model.load(checkpoint_path)
+            print(f"Resumed from checkpoint: {checkpoint_path}")
+
+    # Get recommended training config
+    base_config = get_recommended_config(model_type, variant, dataset_size=6999)
+
+    # Prepare dataset path and training config
+    if model_type == 'yolo':
+        dataset_path = "/datasets/yolo/data.yaml" if USE_FILTERED_DATASET else f"/datasets/data.yaml"
+        train_config = {
+            **base_config,
+            'data': dataset_path,
+            'epochs': EPOCHS,
+            'patience': PATIENCE,
+            'project': '/model',
+            'name': f'{variant}_{NUM_CLASSES}class',
+        }
+    elif model_type == 'rfdetr':
+        dataset_path = "/datasets/coco" if USE_FILTERED_DATASET else "/datasets"
+        train_config = {
+            **base_config,
+            'dataset_dir': dataset_path,
+            'epochs': EPOCHS,
+            'patience': PATIENCE,
+            'save_dir': '/model',
+        }
+
+    # Train
+    print(f"\nStarting training with config:")
+    print(json.dumps(train_config, indent=2))
+
+    results = model.train(data_path=dataset_path, **train_config)
+
+    # Save final model
+    try:
+        model.save("/model/best.pt")
+
+        # Log to WandB only if model was saved
+        if os.path.exists("/model/best.pt"):
+            artifact = wandb.Artifact(f'{model_type}_{variant}_{NUM_CLASSES}class', type='model')
+            artifact.add_file("/model/best.pt")
+            run.log_artifact(artifact)
+        else:
+            print("Warning: Model checkpoint not found at /model/best.pt, skipping WandB artifact")
+    except Exception as e:
+        print(f"Warning: Could not save model - {e}")
+
+    run.finish()
+
+    print(f"\n{'='*80}")
+    print("TRAINING COMPLETE")
+    print(f"{'='*80}\n")
+
+    return results
+
+
+# ============================================================================
+# LEGACY YOLO TRAINING (For backward compatibility)
+# ============================================================================
 @app.function(
     image=image,
     gpu="A10G",
@@ -382,8 +1068,11 @@ def train_yolo(resume=False):
     global BATCH_SIZE, IMAGE_SIZE, EPOCHS, MODEL, VERSION, MODEL_PATH
     global FREEZE_LAYERS, LEARNING_RATE, FINAL_LR_FACTOR
 
-    # Import augmentation utilities
+    # Import dependencies inside Modal function
     import sys
+    import os
+    import wandb
+    from ultralytics import YOLO
     sys.path.insert(0, '/root')
     from yolo_augmented_dataset import (
         get_yolo_training_hyperparameters,
@@ -1320,7 +2009,12 @@ def analyze_failure_cases(model, images, img_dir, label_dir, class_names, conf_t
 )
 def validate_and_test_yolo():
     """Domain-aware validation and testing with detailed metrics"""
+    # Import dependencies inside Modal function
+    import os
+    import wandb
     import yaml
+    from ultralytics import YOLO
+    import numpy as np
     
     # Preprocessing
     print("\n" + "="*80)
@@ -1710,12 +2404,15 @@ def validate_and_test_yolo():
     volumes={"/model": volume}
 )
 def predict_and_visualize():
+    # Import dependencies inside Modal function
     import cv2
     import os
+    import wandb
     import numpy as np
     from pathlib import Path
     import yaml
-    
+    from ultralytics import YOLO
+
     wandb.login(key=os.environ["WANDB_API_KEY"])
     run = wandb.init(project="brain-ct-hemorrhage", name=f"{MODEL}-{VERSION}_brain_ct_hemorrhage_errors_{VERSION}")
     
@@ -1788,3 +2485,31 @@ def run_validation():
     """Run validation separately after training completes"""
     print("Running validation and testing...")
     validate_and_test_yolo.remote()
+
+# ============================================================================
+# NEW: Unified Training Entrypoints for YOLO and RF-DETR
+# ============================================================================
+
+@app.local_entrypoint()
+def train_yolo_filtered():
+    """Train YOLOv8m on filtered 4-class dataset"""
+    print("Training YOLOv8m on filtered 4-class dataset...")
+    train_model.remote(model_type='yolo', variant='yolov8m', resume=False)
+
+@app.local_entrypoint()
+def train_rfdetr_filtered():
+    """Train RF-DETR Medium on filtered 4-class dataset"""
+    print("Training RF-DETR Medium on filtered 4-class dataset...")
+    train_model.remote(model_type='rfdetr', variant='medium', resume=False)
+
+@app.local_entrypoint()
+def check_data():
+    """Check if dataset is uploaded to Modal Volume"""
+    print("Checking if dataset is uploaded...")
+    check_dataset_uploaded.remote()
+
+@app.local_entrypoint()
+def prepare_datasets():
+    """Prepare filtered 4-class datasets (YOLO + COCO formats)"""
+    print("Preparing filtered 4-class datasets...")
+    prepare_filtered_datasets.remote()

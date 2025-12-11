@@ -1,16 +1,7 @@
 import modal
-from fastapi import FastAPI, File, UploadFile, HTTPException
-from PIL import Image
-import io
-import os
-import logging
 
 MODEL="yolov8m"
 VERSION="v2"
-
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 app = modal.App(f"inference-ct-brain-hemorrhage-{MODEL}-{VERSION}")
 
@@ -33,15 +24,25 @@ image = modal.Image.debian_slim().apt_install("libopencv-dev").pip_install(
 )
 @modal.asgi_app()
 def fastapi_app():
+    from fastapi import FastAPI, File, UploadFile, HTTPException
+    from PIL import Image
+    import io
+    import os
+    import logging
+
+    # Set up logging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
+
     app = FastAPI()
     from ultralytics import YOLO
-    
+
     # Load the model at the module level
     model_path = "/root/model/best.pt_83.pt"
     if not os.path.exists(model_path):
         logger.error(f"Model file not found at {model_path}")
         raise FileNotFoundError(f"Model file not found at {model_path}")
-    
+
     model = YOLO(model_path)
     logger.info(f"Model loaded successfully: {model}")
 
@@ -59,7 +60,7 @@ def fastapi_app():
             raise HTTPException(status_code=400, detail=f"Invalid image file: {str(e)}")
 
         try:
-            results = model(img, conf=0.7, iou=0.7, save=False, imgsz=640)
+            results = model(img, conf=0.25, iou=0.5, save=False, imgsz=640)
             
             processed_results = []
             for result in results:

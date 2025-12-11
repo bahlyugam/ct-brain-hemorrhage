@@ -18,7 +18,7 @@ import os
 
 def main():
     # Paths to your datasets
-    original_data_yaml = "/Users/yugambahl/Desktop/brain_ct/data/UAT_CT_BRAIN_HEMORRHAGE.v2i.yolov8_combined/data.yaml"
+    original_data_yaml = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/archived/current_20251105/UAT_CT_BRAIN_HEMORRHAGE.v2i.yolov8_combined/data.yaml"
     augmented_data_yaml = "/Users/yugambahl/Desktop/brain_ct/data/UAT_CT_BRAIN_HEMORRHAGE.v2i.yolov8_combined_augmented/data.yaml"
 
     # Check which datasets exist

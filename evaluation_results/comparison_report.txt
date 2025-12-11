@@ -1,0 +1,19 @@
+================================================================================
+BRAIN CT HEMORRHAGE DETECTION - MODEL COMPARISON
+================================================================================
+Test Set: 279 images, 341 annotations
+
+OVERALL METRICS
+--------------------------------------------------------------------------------
+mAP_50_95   : YOLO=0.0004  RF-DETR=0.0652  Δ=+0.0649  Winner=RF-DETR
+mAP_50      : YOLO=0.0007  RF-DETR=0.1507  Δ=+0.1500  Winner=RF-DETR
+mAP_75      : YOLO=0.0004  RF-DETR=0.0546  Δ=+0.0542  Winner=RF-DETR
+AR_100      : YOLO=0.0080  RF-DETR=0.1085  Δ=+0.1004  Winner=RF-DETR
+
+PER-CLASS METRICS (AP@50)
+--------------------------------------------------------------------------------
+IPH   : YOLO=0.0000  RF-DETR=0.2224  Δ=+0.2224  Winner=RF-DETR
+IVH   : YOLO=0.0000  RF-DETR=0.0627  Δ=+0.0627  Winner=RF-DETR
+SAH   : YOLO=0.0028  RF-DETR=0.2979  Δ=+0.2951  Winner=RF-DETR
+SDH   : YOLO=0.0000  RF-DETR=0.0198  Δ=+0.0198  Winner=RF-DETR
+================================================================================
