@@ -1,63 +1,99 @@
 #!/usr/bin/env python3
 """
-Script to extract rows present in negative_feedback_v2.csv but not in negative_feedback.csv
+Script to extract rows present in new CSV file but not in old CSV file.
+Useful for identifying new data entries between different versions of a dataset.
 """
 
 import pandas as pd
 import os
+import argparse
 
-# File paths
-v1_path = 'data/metadata/negative_feedback.csv'
-v2_path = 'data/metadata/negative_feedback_v2.csv'
-output_path = 'data/metadata/negative_feedback_new_rows.csv'
+def main():
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='Extract rows from new CSV that are not present in old CSV',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog='''
+Examples:
+  python extract_new_rows.py --old data/v1.csv --new data/v2.csv --output data/new_rows.csv
+  python extract_new_rows.py --old data/v1.csv --new data/v2.csv --output data/new_rows.csv --key-columns id timestamp
+        '''
+    )
+    parser.add_argument('--old', type=str, default='data/metadata/negative_feedback_v2.csv',
+                        help='Path to old CSV file (default: data/metadata/negative_feedback_v2.csv)')
+    parser.add_argument('--new', type=str, default='data/metadata/negative_feedback_v3.csv',
+                        help='Path to new CSV file (default: data/metadata/negative_feedback_v3.csv)')
+    parser.add_argument('--output', type=str, default='data/metadata/negative_feedback_new_rows_v3.csv',
+                        help='Path to output CSV file (default: data/metadata/negative_feedback_new_rows_v3.csv)')
+    parser.add_argument('--key-columns', nargs='+', default=['patient_id', 'instance_no', 'image_url'],
+                        help='Column names to use as composite key (default: patient_id instance_no image_url)')
 
-print("Reading CSV files...")
-print(f"Loading {v1_path}...")
-df_v1 = pd.read_csv(v1_path)
-print(f"  - Rows in v1: {len(df_v1)}")
+    args = parser.parse_args()
 
-print(f"Loading {v2_path}...")
-df_v2 = pd.read_csv(v2_path)
-print(f"  - Rows in v2: {len(df_v2)}")
+    old_path = args.old
+    new_path = args.new
+    output_path = args.output
+    key_columns = args.key_columns
 
-# Define key columns to identify unique rows
-# Using patient_id, instance_no, and image_url as composite key
-key_columns = ['patient_id', 'instance_no', 'image_url']
+    print("Reading CSV files...")
+    print(f"Loading old file: {old_path}...")
+    df_old = pd.read_csv(old_path)
+    print(f"  - Rows in old file: {len(df_old)}")
 
-print(f"\nUsing key columns for comparison: {key_columns}")
+    print(f"Loading new file: {new_path}...")
+    df_new = pd.read_csv(new_path)
+    print(f"  - Rows in new file: {len(df_new)}")
 
-# Create composite keys for both dataframes
-df_v1['_composite_key'] = df_v1[key_columns].astype(str).agg('||'.join, axis=1)
-df_v2['_composite_key'] = df_v2[key_columns].astype(str).agg('||'.join, axis=1)
+    # Validate that key columns exist in both dataframes
+    print(f"\nUsing key columns for comparison: {key_columns}")
 
-# Find rows in v2 that are not in v1
-v1_keys = set(df_v1['_composite_key'])
-v2_keys = set(df_v2['_composite_key'])
-new_keys = v2_keys - v1_keys
+    for col in key_columns:
+        if col not in df_old.columns:
+            raise ValueError(f"Column '{col}' not found in old file")
+        if col not in df_new.columns:
+            raise ValueError(f"Column '{col}' not found in new file")
 
-print(f"\nAnalysis:")
-print(f"  - Unique keys in v1: {len(v1_keys)}")
-print(f"  - Unique keys in v2: {len(v2_keys)}")
-print(f"  - New rows in v2 (not in v1): {len(new_keys)}")
+    # Create composite keys for both dataframes
+    df_old['_composite_key'] = df_old[key_columns].astype(str).agg('||'.join, axis=1)
+    df_new['_composite_key'] = df_new[key_columns].astype(str).agg('||'.join, axis=1)
 
-# Filter v2 to get only new rows
-df_new_rows = df_v2[df_v2['_composite_key'].isin(new_keys)].copy()
+    # Find rows in new file that are not in old file
+    old_keys = set(df_old['_composite_key'])
+    new_keys = set(df_new['_composite_key'])
+    unique_new_keys = new_keys - old_keys
 
-# Remove the temporary composite key column
-df_new_rows = df_new_rows.drop(columns=['_composite_key'])
+    print(f"\nAnalysis:")
+    print(f"  - Unique keys in old file: {len(old_keys)}")
+    print(f"  - Unique keys in new file: {len(new_keys)}")
+    print(f"  - New rows (not in old file): {len(unique_new_keys)}")
 
-# Save to output file
-print(f"\nSaving new rows to {output_path}...")
-os.makedirs(os.path.dirname(output_path), exist_ok=True)
-df_new_rows.to_csv(output_path, index=False)
+    # Filter new file to get only rows not present in old file
+    df_new_rows = df_new[df_new['_composite_key'].isin(unique_new_keys)].copy()
 
-print(f"✓ Successfully saved {len(df_new_rows)} new rows to {output_path}")
+    # Remove the temporary composite key column
+    df_new_rows = df_new_rows.drop(columns=['_composite_key'])
 
-# Display summary statistics
-if len(df_new_rows) > 0:
-    print("\nSummary of new rows:")
-    print(f"  - Date range: {df_new_rows['date'].min()} to {df_new_rows['date'].max()}")
-    print(f"  - Unique patients: {df_new_rows['patient_id'].nunique()}")
-    print(f"  - Model versions: {df_new_rows['modelVersion'].unique()}")
-    print(f"\nPrimary negative feedback types:")
-    print(df_new_rows['primary_negative_feedback_type'].value_counts())
+    # Save to output file
+    print(f"\nSaving new rows to {output_path}...")
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    df_new_rows.to_csv(output_path, index=False)
+
+    print(f"✓ Successfully saved {len(df_new_rows)} new rows to {output_path}")
+
+    # Display summary statistics if data-specific columns exist
+    if len(df_new_rows) > 0:
+        print("\nSummary of new rows:")
+
+        # Only show column-specific stats if columns exist
+        if 'date' in df_new_rows.columns:
+            print(f"  - Date range: {df_new_rows['date'].min()} to {df_new_rows['date'].max()}")
+        if 'patient_id' in df_new_rows.columns:
+            print(f"  - Unique patients: {df_new_rows['patient_id'].nunique()}")
+        if 'modelVersion' in df_new_rows.columns:
+            print(f"  - Model versions: {df_new_rows['modelVersion'].unique()}")
+        if 'primary_negative_feedback_type' in df_new_rows.columns:
+            print(f"\nPrimary feedback types distribution:")
+            print(df_new_rows['primary_negative_feedback_type'].value_counts())
+
+if __name__ == '__main__':
+    main()
