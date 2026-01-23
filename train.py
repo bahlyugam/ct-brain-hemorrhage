@@ -24,52 +24,62 @@ from pathlib import Path
 MODEL_TYPE = "rfdetr"  # Change to 'rfdetr' for RF-DETR training
 MODEL_VARIANT = "medium"  # YOLO: yolov8m, RF-DETR: medium
 
+# Dataset version: 'v4' or 'v5'
+DATASET_VERSION = "v5"  # V5 is the combined dataset from 3 sources
+
 # Dataset configuration
-USE_FILTERED_DATASET = True  # Use filtered 4-class dataset (EDH/HC removed)
-USE_PREAUGMENTED = False  # Using extensive on-the-fly augmentations
+USE_FILTERED_DATASET = False  # Set to False to use 6-class dataset
+USE_PREAUGMENTED = True  # Dataset is pre-augmented with 3x multiplier
 
-# Original 6-class dataset (for backward compatibility)
-ORIGINAL_DATA_DIR = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/archived/current_20251105/UAT_CT_BRAIN_HEMORRHAGE.v2i.yolov8_combined"
+# V4 dataset paths (3x augmented - 35k training images)
+V4_6CLASS_DIR = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/v4/6class_coco"
+V4_4CLASS_DIR = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/v4/4class_coco"
 
-# Filtered 4-class dataset (IPH, IVH, SAH, SDH only)
-FILTERED_YOLO_DIR = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/filtered_4class/yolo"
-FILTERED_COCO_DIR = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/filtered_4class/coco"
+# V5 dataset paths (combined from 3 sources - 68k augmented training images)
+V5_ORIGINAL_DIR = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/v5/roboflow_original_images"
+V5_AUGMENTED_DIR = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/v5/roboflow_augmented_3x"
 
-# Select dataset based on configuration
-if USE_FILTERED_DATASET:
-    # Mount only filtered_4class directory (7k files - under 125k limit)
-    local_data_dir = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/filtered_4class"
-    if MODEL_TYPE == 'yolo':
-        NUM_CLASSES = 4
-        CLASS_NAMES = ['IPH', 'IVH', 'SAH', 'SDH']
-        print(f"\n{'='*80}")
-        print("USING FILTERED 4-CLASS YOLO DATASET (EDH/HC REMOVED)")
-        print(f"{'='*80}")
-        print(f"Dataset: /datasets/yolo")
-        print(f"Classes: {CLASS_NAMES}")
-        print(f"Max imbalance: 2.26x (was 25.77x)")
-        print(f"{'='*80}\n")
-    elif MODEL_TYPE == 'rfdetr':
-        local_data_dir = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/filtered_4class"
-        NUM_CLASSES = 4
-        CLASS_NAMES = ['IPH', 'IVH', 'SAH', 'SDH']
-        print(f"\n{'='*80}")
-        print("USING FILTERED 4-CLASS COCO DATASET (EDH/HC REMOVED)")
-        print(f"{'='*80}")
-        print(f"Dataset: {local_data_dir}")
-        print(f"Classes: {CLASS_NAMES}")
-        print(f"Format: COCO JSON")
-        print(f"{'='*80}\n")
-else:
-    # Original 6-class dataset
-    local_data_dir = ORIGINAL_DATA_DIR
+# Select dataset based on version and configuration
+if DATASET_VERSION == "v5":
+    # V5 combined dataset (3 sources merged)
+    if USE_PREAUGMENTED:
+        local_data_dir = V5_AUGMENTED_DIR
+        TRAIN_IMAGES = 64314  # 21,438 × 3
+    else:
+        local_data_dir = V5_ORIGINAL_DIR
+        TRAIN_IMAGES = 21438
     NUM_CLASSES = 6
     CLASS_NAMES = ['EDH', 'HC', 'IPH', 'IVH', 'SAH', 'SDH']
     print(f"\n{'='*80}")
-    print("USING ORIGINAL 6-CLASS DATASET")
+    print(f"USING V5 6-CLASS DATASET {'(3x AUGMENTED)' if USE_PREAUGMENTED else '(ORIGINAL)'}")
     print(f"{'='*80}")
     print(f"Dataset: {local_data_dir}")
-    print(f"WARNING: Severe class imbalance (25.77x)")
+    print(f"Training images: {TRAIN_IMAGES:,}")
+    print(f"Classes: {CLASS_NAMES}")
+    print(f"{'='*80}\n")
+elif USE_FILTERED_DATASET:
+    local_data_dir = V4_4CLASS_DIR
+    NUM_CLASSES = 4
+    CLASS_NAMES = ['IPH', 'IVH', 'SAH', 'SDH']
+    TRAIN_IMAGES = 35190 if USE_PREAUGMENTED else 11730
+    print(f"\n{'='*80}")
+    print("USING V4 FILTERED 4-CLASS DATASET")
+    print(f"{'='*80}")
+    print(f"Dataset: {local_data_dir}")
+    print(f"Classes: {CLASS_NAMES}")
+    print(f"{'='*80}\n")
+else:
+    # V4 6-class dataset with 3x augmentation
+    local_data_dir = V4_6CLASS_DIR
+    NUM_CLASSES = 6
+    CLASS_NAMES = ['EDH', 'HC', 'IPH', 'IVH', 'SAH', 'SDH']
+    TRAIN_IMAGES = 35190 if USE_PREAUGMENTED else 11730
+    print(f"\n{'='*80}")
+    print("USING V4 6-CLASS DATASET (3x AUGMENTED)")
+    print(f"{'='*80}")
+    print(f"Dataset: {local_data_dir}")
+    print(f"Training images: {TRAIN_IMAGES:,}")
+    print(f"Classes: {CLASS_NAMES}")
     print(f"{'='*80}\n")
 
 # Multi-resolution training hyperparameters
@@ -78,7 +88,7 @@ IMAGE_SIZE = 512
 EPOCHS = 200
 PATIENCE = 50
 MODEL = MODEL_VARIANT
-VERSION = "v3_filtered_4class"  # New version for filtered dataset
+VERSION = DATASET_VERSION  # Use dataset version for naming
 MODEL_PATH = f"{MODEL}.pt"
 
 # Fine-tuning parameters
@@ -92,8 +102,7 @@ THIN_SLICE_RATIO = 0.5
 THICK_SLICE_RATIO = 0.5
 
 # Create a Modal volume to store the model
-# volume = modal.Volume.from_name(f"{MODEL}-{VERSION}-brain-ct-hemorrhage", create_if_missing=True)
-volume = modal.Volume.from_name(f"{MODEL}-v9_conservative_focal-brain-ct-hemorrhage", create_if_missing=True)
+volume = modal.Volume.from_name(f"{MODEL}-{VERSION}_rfdetr-brain-ct-hemorrhage", create_if_missing=True)
 
 # Define the Modal image with necessary dependencies
 image = (
@@ -138,11 +147,11 @@ image = (
         "/root/ct_augmentations.py"
     )
     .add_local_file(
-        "/Users/yugambahl/Desktop/brain_ct/yolo_augmented_dataset.py",
+        "/Users/yugambahl/Desktop/brain_ct/utils/yolo_augmented_dataset.py",
         "/root/yolo_augmented_dataset.py"
     )
     .add_local_file(
-        "/Users/yugambahl/Desktop/brain_ct/custom_loss.py",
+        "/Users/yugambahl/Desktop/brain_ct/utils/custom_loss.py",
         "/root/custom_loss.py"
     )
 
@@ -161,12 +170,14 @@ image = (
         "/Users/yugambahl/Desktop/brain_ct/data/yolo_to_coco.py",
         "/root/data/yolo_to_coco.py"
     )
-    # Add augmented dataset (17k files for anti-overfitting training)
-    .add_local_dir(
-        "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/augmented_3x_4class",
-        "/datasets_augmented"
-    )
+    # NOTE: Dataset is too large to mount via add_local_dir
+    # Upload to Modal Volume first:
+    # V4: modal volume put medium-v4_rfdetr-brain-ct-hemorrhage <local-path> /6class_coco
+    # V5: modal volume put medium-v5_rfdetr-brain-ct-hemorrhage <local-path> /v5_augmented
 )
+
+# Use the same volume for both models and datasets
+dataset_volume = volume  # Reuse the same volume
 
 app = modal.App(f"{MODEL}-{VERSION}-brain-ct-hemorrhage-training")
 def find_latest_model(model_dir="/model"):
@@ -438,7 +449,7 @@ def create_stratified_dataset_yaml(base_path="/datasets", output_path="/model/st
 # ============================================================================
 
 # Create a separate volume for datasets
-dataset_volume = modal.Volume.from_name("brain-ct-datasets", create_if_missing=True)
+dataset_volume = modal.Volume.from_name(f"{MODEL}-v4_rfdetr-brain-ct-hemorrhage", create_if_missing=True)
 
 @app.function(
     image=image,
@@ -465,7 +476,7 @@ def check_dataset_uploaded():
     else:
         print(f"✗ Dataset NOT found at {remote_path}")
         print("\nPlease upload using:")
-        print(f"modal volume put brain-ct-datasets {ORIGINAL_DATA_DIR} /original_6class")
+        print(f"modal volume put brain-ct-datasets <your-dataset-path> /original_6class")
         return {"status": "not_found"}
 
 @app.function(
@@ -772,19 +783,34 @@ def train_augmented(model_type='rfdetr', variant='medium', multiplier=3):
     """
     from pathlib import Path
 
-    # Check if local dataset exists
-    local_dataset = f"/Users/yugambahl/Desktop/brain_ct/data/training_datasets/augmented_{multiplier}x_4class"
+    # Determine dataset path based on version
+    if DATASET_VERSION == "v5":
+        if USE_PREAUGMENTED:
+            local_dataset = V5_AUGMENTED_DIR
+        else:
+            local_dataset = V5_ORIGINAL_DIR
+    else:
+        local_dataset = f"/Users/yugambahl/Desktop/brain_ct/data/training_datasets/augmented_{multiplier}x_4class"
+
     if not Path(local_dataset).exists():
-        print(f"❌ Error: Local augmented dataset not found at {local_dataset}")
-        print(f"Please run augmentation first:")
-        print(f"  python scripts/augment_coco_dataset.py --input data/training_datasets/filtered_4class/coco --output data/training_datasets/augmented_{multiplier}x_4class/coco --multiplier {multiplier}")
+        print(f"❌ Error: Local dataset not found at {local_dataset}")
+        if DATASET_VERSION == "v5":
+            print(f"Please run augmentation first:")
+            print(f"  python scripts/augment_coco_dataset.py \\")
+            print(f"    --input {V5_ORIGINAL_DIR} \\")
+            print(f"    --output {V5_AUGMENTED_DIR} \\")
+            print(f"    --multiplier {multiplier}")
+        else:
+            print(f"Please run augmentation first:")
+            print(f"  python scripts/augment_coco_dataset.py --input data/training_datasets/filtered_4class/coco --output data/training_datasets/augmented_{multiplier}x_4class/coco --multiplier {multiplier}")
         return
 
     print(f"\n{'='*80}")
-    print("STARTING TRAINING WITH AUGMENTED DATASET (ANTI-OVERFITTING)")
+    print(f"STARTING TRAINING WITH {DATASET_VERSION.upper()} AUGMENTED DATASET")
     print(f"{'='*80}")
-    print(f"Dataset will be mounted from: {local_dataset}")
-    print(f"Modal will automatically mount your local directory")
+    print(f"Dataset: {local_dataset}")
+    print(f"Model: {model_type.upper()} {variant}")
+    print(f"Classes: {NUM_CLASSES} ({', '.join(CLASS_NAMES)})")
     print(f"{'='*80}\n")
 
     # Start training (dataset is already mounted)
@@ -836,8 +862,14 @@ def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3):
     # NOTE: WandB initialization removed - RF-DETR handles it natively now
     # WandB will be initialized automatically by RF-DETR with wandb=True parameter
 
+    # Determine dataset size based on version
+    if DATASET_VERSION == "v5":
+        dataset_size = 64314  # V5 augmented train images
+    else:
+        dataset_size = 6999 * multiplier
+
     # Get recommended training config first (to get resolution)
-    base_config = get_recommended_config(model_type, variant, dataset_size=6999 * multiplier)
+    base_config = get_recommended_config(model_type, variant, dataset_size=dataset_size)
 
     # Create model using factory with resolution from config
     model = create_model(
@@ -848,9 +880,14 @@ def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3):
         resolution=base_config.get('resolution', 640)
     )
 
-    # Prepare dataset path for augmented data (mounted at /datasets_augmented)
+    # Prepare dataset path for augmented data
+    # V5: /data/v5_augmented (uploaded to Modal Volume)
+    # V4: /datasets_augmented/coco
     if model_type == 'rfdetr':
-        dataset_path = f"/datasets_augmented/coco"
+        if DATASET_VERSION == "v5":
+            dataset_path = "/data/v5_augmented"
+        else:
+            dataset_path = "/datasets_augmented/coco"
         train_config = {
             **base_config,
             'dataset_dir': dataset_path,
@@ -860,7 +897,10 @@ def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3):
         }
     else:
         print(f"⚠ Warning: Augmented dataset training is optimized for RF-DETR")
-        dataset_path = f"/data/augmented_{multiplier}x_4class/yolo"
+        if DATASET_VERSION == "v5":
+            dataset_path = "/data/v5_augmented"
+        else:
+            dataset_path = f"/data/augmented_{multiplier}x_4class/yolo"
         train_config = {
             **base_config,
             'data': dataset_path + '/data.yaml',
@@ -873,7 +913,8 @@ def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3):
     # Train
     print(f"\nStarting training with enhanced regularization:")
     print(f"  Dataset: {dataset_path}")
-    print(f"  Training images: {6999 * multiplier} (original: 5,565 × {multiplier})")
+    print(f"  Dataset version: {DATASET_VERSION}")
+    print(f"  Training images: {dataset_size:,}")
     print(f"  Config:")
     print(json.dumps(train_config, indent=2))
 
@@ -928,9 +969,9 @@ def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3):
 # ============================================================================
 @app.function(
     image=image,
-    gpu="A10G",
+    gpu="A100-40GB",  # Changed from A10G to A100 for faster training
     secrets=[modal.Secret.from_name("wandb-api-key")],
-    volumes={"/model": volume},
+    volumes={"/model": volume, "/datasets": dataset_volume},
     timeout=86400,  # 24 hours
     memory=32768,    # 32GB RAM for faster data loading
     cpu=8,          # 8 CPUs for parallel data loading
@@ -951,7 +992,11 @@ def train_model(model_type='yolo', variant='yolov8m', resume=False):
     # Import dependencies inside Modal function
     import os
     import wandb
+    import json
     from models.model_factory import create_model, get_recommended_config
+
+    # Determine dataset path
+    dataset_subpath = "4class_coco" if USE_FILTERED_DATASET else "6class_coco"
 
     print(f"\n{'='*80}")
     print(f"UNIFIED MODEL TRAINING: {model_type.upper()} {variant.upper()}")
@@ -960,11 +1005,8 @@ def train_model(model_type='yolo', variant='yolov8m', resume=False):
     print(f"Variant: {variant}")
     print(f"Classes: {NUM_CLASSES} ({CLASS_NAMES})")
     print(f"Resume: {resume}")
+    print(f"Dataset: {dataset_subpath}")
     print(f"{'='*80}\n")
-
-    # Datasets are already mounted at /datasets from local filtered_4class directory
-    # No preparation needed - data was already prepared locally and mounted via image.add_local_dir()
-    print(f"Using pre-prepared filtered dataset mounted at /datasets")
 
     # Initialize WandB
     wandb.login(key=os.environ["WANDB_API_KEY"])
@@ -1003,7 +1045,7 @@ def train_model(model_type='yolo', variant='yolov8m', resume=False):
 
     # Prepare dataset path and training config
     if model_type == 'yolo':
-        dataset_path = "/datasets/yolo/data.yaml" if USE_FILTERED_DATASET else f"/datasets/data.yaml"
+        dataset_path = f"{dataset_subpath}/data.yaml"
         train_config = {
             **base_config,
             'data': dataset_path,
@@ -1013,7 +1055,7 @@ def train_model(model_type='yolo', variant='yolov8m', resume=False):
             'name': f'{variant}_{NUM_CLASSES}class',
         }
     elif model_type == 'rfdetr':
-        dataset_path = "/datasets/coco" if USE_FILTERED_DATASET else "/datasets"
+        dataset_path = f"/datasets/{dataset_subpath}"
         train_config = {
             **base_config,
             'dataset_dir': dataset_path,
@@ -2497,9 +2539,9 @@ def train_yolo_filtered():
     train_model.remote(model_type='yolo', variant='yolov8m', resume=False)
 
 @app.local_entrypoint()
-def train_rfdetr_filtered():
-    """Train RF-DETR Medium on filtered 4-class dataset"""
-    print("Training RF-DETR Medium on filtered 4-class dataset...")
+def train_rfdetr():
+    """Train RF-DETR Medium on 6-class dataset"""
+    print("Training RF-DETR Medium on 6-class dataset...")
     train_model.remote(model_type='rfdetr', variant='medium', resume=False)
 
 @app.local_entrypoint()

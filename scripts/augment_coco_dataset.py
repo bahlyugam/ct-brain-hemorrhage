@@ -13,11 +13,42 @@ import json
 import shutil
 import argparse
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 import cv2
 import numpy as np
 from tqdm import tqdm
 import albumentations as A
+
+
+def clip_bbox_to_image(bbox: List[float], img_width: int, img_height: int) -> Optional[List[float]]:
+    """
+    Clip bounding box to image boundaries and validate.
+
+    Args:
+        bbox: [x, y, width, height] in COCO format (pixels)
+        img_width: Image width in pixels
+        img_height: Image height in pixels
+
+    Returns:
+        Clipped bbox [x, y, width, height] or None if zero-area after clipping
+    """
+    x, y, w, h = bbox
+
+    # Clip coordinates to image boundaries
+    x = max(0.0, x)
+    y = max(0.0, y)
+    x_max = min(float(img_width), x + w)
+    y_max = min(float(img_height), y + h)
+
+    # Recalculate width and height after clipping
+    w = x_max - x
+    h = y_max - y
+
+    # Return None if clipping results in zero-area bbox
+    if w <= 0 or h <= 0:
+        return None
+
+    return [x, y, w, h]
 
 
 def load_coco_annotations(json_path: str) -> Dict[str, Any]:
@@ -310,14 +341,24 @@ def augment_coco_dataset(
                 }
                 new_coco_data['images'].append(new_img_info)
 
-                # Add annotations
+                # Add annotations with bbox clipping
+                img_width = aug_image.shape[1]
+                img_height = aug_image.shape[0]
+
                 for bbox, cat_id in zip(aug_bboxes, aug_category_ids):
+                    # Clip bbox to image boundaries
+                    clipped_bbox = clip_bbox_to_image(list(bbox), img_width, img_height)
+
+                    if clipped_bbox is None:
+                        # Skip zero-area boxes after clipping
+                        continue
+
                     new_ann = {
                         'id': next_ann_id,
                         'image_id': next_image_id,
                         'category_id': cat_id,
-                        'bbox': list(bbox),  # [x, y, w, h]
-                        'area': bbox[2] * bbox[3],  # w * h
+                        'bbox': clipped_bbox,  # Clipped [x, y, w, h]
+                        'area': clipped_bbox[2] * clipped_bbox[3],  # Recalculated w * h
                         'iscrowd': 0,
                         'segmentation': []
                     }

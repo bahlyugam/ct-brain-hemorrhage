@@ -367,9 +367,9 @@ def main(csv_path, output_folder, temp_folder='temp_dicom',
 
 if __name__ == "__main__":
     # Configuration
-    CSV_FILE = "/Users/yugambahl/Desktop/brain_ct/data/metadata/negative_feedback_new_rows.csv"  # Path to your CSV file
-    OUTPUT_FOLDER = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/current/negative_feedback_new_rows/png"  # Folder to save PNG files
-    TEMP_FOLDER = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/current/negative_feedback_new_rows/dicom"  # Temporary folder for DICOM files
+    CSV_FILE = "/Users/yugambahl/Desktop/brain_ct/data/metadata/negative_feedback_new_rows_v3.csv"  # Path to your CSV file
+    OUTPUT_FOLDER = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/v3/negative_feedback/png"  # Folder to save PNG files
+    TEMP_FOLDER = "/Users/yugambahl/Desktop/brain_ct/data/training_datasets/v3/negative_feedback/dicom"  # Temporary folder for DICOM files
 
     # AWS Credentials (if needed for private S3 buckets)
     USE_CREDENTIALS = True  # Set to True if S3 bucket requires authentication

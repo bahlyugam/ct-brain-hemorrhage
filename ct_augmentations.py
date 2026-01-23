@@ -143,12 +143,14 @@ def get_training_augmentation(image_size=640, slice_type='thin'):
 
         # 3. Combined geometric transformation (RSNA winners' approach)
         # Single operation is more efficient than separate transforms
-        A.ShiftScaleRotate(
-            shift_limit=shift_limit,      # Translation: simulate FOV variations
-            scale_limit=0.1,               # Zoom: 0.9-1.1x provides 1.22x size variation
-            rotate_limit=rotate_limit,     # Rotation: ±10-16° for positioning variation
-            border_mode=cv2.BORDER_CONSTANT,
-            value=0,  # Black padding for CT background
+        # Note: In modern albumentations, use Affine instead of ShiftScaleRotate
+        A.Affine(
+            translate_percent={'x': (-shift_limit, shift_limit), 'y': (-shift_limit, shift_limit)},
+            scale=(0.9, 1.1),              # 0.9-1.1x provides 1.22x size variation
+            rotate=(-rotate_limit, rotate_limit),
+            shear=0,
+            mode=cv2.BORDER_CONSTANT,
+            cval=0,  # Black padding for CT background
             interpolation=cv2.INTER_LINEAR,
             p=shift_scale_rotate_p
         ),
@@ -173,13 +175,11 @@ def get_training_augmentation(image_size=640, slice_type='thin'):
         # 6. Optional: Coarse dropout (random erasing)
         # Forces network to use multiple regions for detection
         # RSNA winners used max_holes=8, max_height=16, max_width=16
+        # Note: In modern albumentations, parameters have changed
         A.CoarseDropout(
-            max_holes=8,
-            max_height=16,
-            max_width=16,
-            min_holes=1,
-            min_height=8,
-            min_width=8,
+            num_holes_range=(1, 8),
+            hole_height_range=(8, 16),
+            hole_width_range=(8, 16),
             fill_value=0,
             p=0.3
         ),
@@ -288,7 +288,7 @@ def get_validation_augmentation(image_size=640):
             value=0
         ),
     ], bbox_params=A.BboxParams(
-        format='yolo',
+        format='coco',  # Fixed: was 'yolo' but pipeline uses COCO format [x, y, width, height]
         label_fields=['class_labels']
     ))
 
