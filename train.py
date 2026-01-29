@@ -448,8 +448,8 @@ def create_stratified_dataset_yaml(base_path="/datasets", output_path="/model/st
 # DATASET PREPARATION (NEW)
 # ============================================================================
 
-# Create a separate volume for datasets
-dataset_volume = modal.Volume.from_name(f"{MODEL}-v4_rfdetr-brain-ct-hemorrhage", create_if_missing=True)
+# Create a separate volume for datasets (uses same volume as model for V5)
+dataset_volume = modal.Volume.from_name(f"{MODEL}-{VERSION}_rfdetr-brain-ct-hemorrhage", create_if_missing=True)
 
 @app.function(
     image=image,
@@ -769,7 +769,7 @@ def prepare_augmented_dataset(multiplier: int = 3, strength: str = 'aggressive')
 
 
 @app.local_entrypoint()
-def train_augmented(model_type='rfdetr', variant='medium', multiplier=3):
+def train_augmented(model_type='rfdetr', variant='medium', multiplier=3, resume: bool = False):
     """
     Train on locally mounted augmented dataset (ANTI-OVERFITTING VERSION).
 
@@ -780,6 +780,7 @@ def train_augmented(model_type='rfdetr', variant='medium', multiplier=3):
         model_type: 'yolo' or 'rfdetr' (default: rfdetr)
         variant: Model variant (e.g., 'medium')
         multiplier: Dataset multiplier (default: 3)
+        resume: Resume from latest checkpoint (default: False)
     """
     from pathlib import Path
 
@@ -811,23 +812,35 @@ def train_augmented(model_type='rfdetr', variant='medium', multiplier=3):
     print(f"Dataset: {local_dataset}")
     print(f"Model: {model_type.upper()} {variant}")
     print(f"Classes: {NUM_CLASSES} ({', '.join(CLASS_NAMES)})")
+    print(f"Resume: {resume}")
     print(f"{'='*80}\n")
 
     # Start training (dataset is already mounted)
-    train_model_augmented.remote(model_type=model_type, variant=variant, multiplier=multiplier)
+    train_model_augmented.remote(model_type=model_type, variant=variant, multiplier=multiplier, resume=resume)
+
+
+@app.local_entrypoint()
+def resume_augmented(model_type='rfdetr', variant='medium', multiplier=3):
+    """
+    Resume training on augmented dataset from latest checkpoint.
+
+    Convenience function that calls train_augmented with resume=True.
+    """
+    print("Resuming training from checkpoint...")
+    train_model_augmented.remote(model_type=model_type, variant=variant, multiplier=multiplier, resume=True)
 
 
 @app.function(
     image=image,
-    gpu="A100-40GB",  # Upgraded from A10G for larger batch size (32)
+    gpu="B200",  # NVIDIA Blackwell B200 - 180GB HBM3e, 8TB/s bandwidth
     secrets=[modal.Secret.from_name("wandb-api-key")],
-    volumes={"/data": dataset_volume, "/model": volume},
+    volumes={"/vol": volume},  # Single mount point for both data and models
     timeout=86400,  # 24 hours
     memory=49152,    # 48GB RAM for faster data loading with larger batches
     cpu=12,          # 12 CPUs for parallel data loading
     min_containers=0
 )
-def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3):
+def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3, resume=False):
     """
     Train RF-DETR on augmented dataset (ANTI-OVERFITTING VERSION).
 
@@ -838,6 +851,7 @@ def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3):
         model_type: 'yolo' or 'rfdetr' (recommended: rfdetr for augmented data)
         variant: Model variant (e.g., 'medium' for RF-DETR)
         multiplier: Dataset multiplier used (default: 3)
+        resume: Resume from latest checkpoint (default: False)
 
     Returns:
         Training results
@@ -859,8 +873,37 @@ def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3):
     print(f"Classes: {NUM_CLASSES} ({CLASS_NAMES})")
     print(f"{'='*80}\n")
 
-    # NOTE: WandB initialization removed - RF-DETR handles it natively now
-    # WandB will be initialized automatically by RF-DETR with wandb=True parameter
+    # Debug: Check what's mounted at /vol
+    print("DEBUG: Checking mounted volumes...")
+    print(f"  /vol exists: {os.path.exists('/vol')}")
+    if os.path.exists('/vol'):
+        print(f"  /vol contents: {os.listdir('/vol')}")
+        if os.path.exists('/vol/v5_augmented'):
+            print(f"  /vol/v5_augmented contents: {os.listdir('/vol/v5_augmented')}")
+            if os.path.exists('/vol/v5_augmented/train'):
+                train_files = os.listdir('/vol/v5_augmented/train')
+                print(f"  /vol/v5_augmented/train: {len(train_files)} files")
+                print(f"  First 5 files: {train_files[:5]}")
+                ann_exists = os.path.exists('/vol/v5_augmented/train/_annotations.coco.json')
+                print(f"  _annotations.coco.json exists: {ann_exists}")
+
+    # Initialize WandB for logging
+    wandb.login(key=os.environ.get("WANDB_API_KEY"))
+    wandb.init(
+        project="brain-ct-hemorrhage",
+        name=f"{model_type}_{variant}_{NUM_CLASSES}class_{DATASET_VERSION}_aug{multiplier}x",
+        config={
+            "model_type": model_type,
+            "variant": variant,
+            "num_classes": NUM_CLASSES,
+            "class_names": CLASS_NAMES,
+            "dataset_version": DATASET_VERSION,
+            "epochs": EPOCHS,
+            "batch_size": BATCH_SIZE,
+            "learning_rate": LEARNING_RATE,
+            "multiplier": multiplier,
+        }
+    )
 
     # Determine dataset size based on version
     if DATASET_VERSION == "v5":
@@ -881,32 +924,68 @@ def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3):
     )
 
     # Prepare dataset path for augmented data
-    # V5: /data/v5_augmented (uploaded to Modal Volume)
-    # V4: /datasets_augmented/coco
+    # V5: /vol/v5_augmented (uploaded to Modal Volume)
+    # V4: /vol/datasets_augmented/coco
     if model_type == 'rfdetr':
         if DATASET_VERSION == "v5":
-            dataset_path = "/data/v5_augmented"
+            dataset_path = "/vol/v5_augmented"
         else:
-            dataset_path = "/datasets_augmented/coco"
+            dataset_path = "/vol/datasets_augmented/coco"
+
+        # RF-DETR requires a test/ split - create symlink to valid/ if test doesn't exist
+        test_path = os.path.join(dataset_path, "test")
+        valid_path = os.path.join(dataset_path, "valid")
+        if not os.path.exists(test_path) and os.path.exists(valid_path):
+            print(f"Creating test/ symlink -> valid/ (RF-DETR requires test split)")
+            os.symlink(valid_path, test_path)
+            print(f"  ✓ Created symlink: {test_path} -> {valid_path}")
+
+        # Check for existing checkpoints if resume=True
+        checkpoint_path = None
+        output_dir = '/vol/model/rfdetr_output'
+        if resume:
+            print(f"\n{'='*60}")
+            print("CHECKING FOR EXISTING CHECKPOINTS")
+            print(f"{'='*60}")
+            # RF-DETR saves checkpoints in output_dir
+            possible_checkpoints = [
+                f'{output_dir}/checkpoint_best_ema.pth',
+                f'{output_dir}/checkpoint_best_regular.pth',
+                f'{output_dir}/checkpoint.pth',
+            ]
+            for ckpt in possible_checkpoints:
+                if os.path.exists(ckpt):
+                    checkpoint_path = ckpt
+                    print(f"  ✓ Found checkpoint: {ckpt}")
+                    break
+            if checkpoint_path is None:
+                print("  ⚠ No checkpoint found, starting from scratch")
+            print(f"{'='*60}\n")
+
         train_config = {
             **base_config,
             'dataset_dir': dataset_path,
             'epochs': EPOCHS,
             'patience': 50,  # Early stopping
-            'save_dir': '/model',
+            'output_dir': output_dir,  # Where RF-DETR saves checkpoints
         }
+
+        # Add resume path if checkpoint exists
+        if checkpoint_path:
+            train_config['resume'] = checkpoint_path
+            print(f"✓ Will resume from: {checkpoint_path}")
     else:
         print(f"⚠ Warning: Augmented dataset training is optimized for RF-DETR")
         if DATASET_VERSION == "v5":
-            dataset_path = "/data/v5_augmented"
+            dataset_path = "/vol/v5_augmented"
         else:
-            dataset_path = f"/data/augmented_{multiplier}x_4class/yolo"
+            dataset_path = f"/vol/augmented_{multiplier}x_4class/yolo"
         train_config = {
             **base_config,
             'data': dataset_path + '/data.yaml',
             'epochs': EPOCHS,
             'patience': 50,
-            'project': '/model',
+            'project': '/vol/model',
             'name': f'{variant}_{NUM_CLASSES}class_aug{multiplier}x',
         }
 
@@ -928,22 +1007,26 @@ def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3):
     test_dataset_path = dataset_path.replace('/coco', '/coco/test') if model_type == 'rfdetr' else dataset_path
 
     if model_type == 'rfdetr':
-        test_results = model.validate(data_path=test_dataset_path)
+        try:
+            test_results = model.validate(data_path=test_dataset_path)
 
-        # Log test metrics to WandB with 'test/' prefix
-        if test_results and 'metrics' in test_results:
-            test_metrics = {}
-            for key, value in test_results['metrics'].items():
-                # Add test/ prefix to differentiate from validation
-                test_key = f"test/{key}" if not key.startswith('test/') else key
-                test_metrics[test_key] = value
+            # Log test metrics to WandB with 'test/' prefix
+            if test_results and 'metrics' in test_results:
+                test_metrics = {}
+                for key, value in test_results['metrics'].items():
+                    # Add test/ prefix to differentiate from validation
+                    test_key = f"test/{key}" if not key.startswith('test/') else key
+                    test_metrics[test_key] = value
 
-            wandb.log(test_metrics)
-            print(f"\n✓ Logged test set metrics to WandB")
-            print(f"Test metrics: {test_metrics}")
+                wandb.log(test_metrics)
+                print(f"\n✓ Logged test set metrics to WandB")
+                print(f"Test metrics: {test_metrics}")
+        except Exception as e:
+            print(f"⚠ Test evaluation failed: {e}")
 
     # Save final model
-    final_model_path = f"/model/{model_type}_{variant}_{NUM_CLASSES}class_aug{multiplier}x_final.pt"
+    os.makedirs('/vol/model', exist_ok=True)
+    final_model_path = f"/vol/model/{model_type}_{variant}_{NUM_CLASSES}class_aug{multiplier}x_final.pt"
     if hasattr(model, 'save'):
         model.save(final_model_path)
         print(f"Model saved to: {final_model_path}")
@@ -952,10 +1035,12 @@ def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3):
     volume.commit()
 
     # Log final training metrics to WandB
-    if results and 'metrics' in results:
-        wandb.log(results['metrics'])
-
-    wandb.finish()
+    try:
+        if results and 'metrics' in results:
+            wandb.log(results['metrics'])
+        wandb.finish()
+    except Exception as e:
+        print(f"⚠ WandB logging failed: {e}")
 
     print(f"\n{'='*80}")
     print("AUGMENTED TRAINING COMPLETE")
@@ -969,7 +1054,7 @@ def train_model_augmented(model_type='rfdetr', variant='medium', multiplier=3):
 # ============================================================================
 @app.function(
     image=image,
-    gpu="A100-40GB",  # Changed from A10G to A100 for faster training
+    gpu="B200",  # NVIDIA Blackwell B200 - 180GB HBM3e, 8TB/s bandwidth
     secrets=[modal.Secret.from_name("wandb-api-key")],
     volumes={"/model": volume, "/datasets": dataset_volume},
     timeout=86400,  # 24 hours
